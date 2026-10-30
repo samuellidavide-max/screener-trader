@@ -144,10 +144,11 @@ def scarica(tickers, period=None, start=None):
 # ======================================================================
 @st.cache_data(show_spinner=False, ttl=21600)
 def get_fondamentali(ticker):
+    tko = yf.Ticker(ticker)
     try:
-        info = yf.Ticker(ticker).info
+        info = tko.info or {}
     except Exception:
-        return {}
+        info = {}
 
     def g(*keys):
         for k in keys:
@@ -156,12 +157,27 @@ def get_fondamentali(ticker):
                 return v
         return None
 
+    mktcap = g("marketCap")
+    if mktcap is None:                 # canale alternativo per la capitalizzazione
+        try:
+            fi = tko.fast_info
+            mktcap = fi.get("market_cap") if hasattr(fi, "get") else getattr(fi, "market_cap", None)
+        except Exception:
+            pass
+
+    pe = g("trailingPE", "forwardPE")
+    peg = g("trailingPegRatio", "pegRatio")
+    if peg is None:                    # PEG calcolato se Yahoo non lo fornisce
+        growth = g("earningsGrowth", "earningsQuarterlyGrowth")
+        if pe is not None and growth is not None and growth > 0:
+            peg = round(pe / (growth * 100), 2)
+
     return {
         "Azienda": g("shortName", "longName") or ticker,
-        "MktCap": g("marketCap"),                     # in valuta (USD/EUR)
-        "PEG": g("trailingPegRatio", "pegRatio"),
-        "PE": g("trailingPE"),
-        "ROE": g("returnOnEquity"),                   # frazione: 0.15 = 15%
+        "MktCap": mktcap,                     # in valuta (USD/EUR)
+        "PEG": peg,
+        "PE": pe,
+        "ROE": g("returnOnEquity"),           # frazione: 0.15 = 15%
     }
 
 
@@ -235,9 +251,20 @@ with tab_scr:
                 for c in ["Azienda", "MktCap", "PEG", "PE", "ROE"]:
                     cand[c] = fdf[c].values if c in fdf else None
 
+            # quanti candidati hanno davvero ricevuto dati da Yahoo?
+            dati_fond_ok = 0
+            if len(cand) and "MktCap" in cand:
+                dati_fond_ok = int(cand[["MktCap", "PE", "ROE"]].notna().any(axis=1).sum())
+            fond_in_blocco_assenti = len(cand) > 0 and dati_fond_ok == 0
+
             # --- applica i filtri fondamentali ---
             scartati_fond = 0
-            if usa_fond and len(cand):
+            if usa_fond and len(cand) and fond_in_blocco_assenti:
+                st.warning("⚠️ Yahoo non ha restituito i dati fondamentali per i candidati "
+                           "(di solito è un limite di richieste del server gratuito). "
+                           "Mostro i candidati tecnici **senza** filtro fondamentale: "
+                           "riprova tra qualche minuto per applicare i filtri.")
+            elif usa_fond and len(cand):
                 def passa(r):
                     checks = [
                         (r["MktCap"], lambda v: v >= min_mktcap * 1e9),
