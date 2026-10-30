@@ -49,10 +49,26 @@ Vai su https://github.com e accedi (o crea un account gratuito).
 ---
 
 ## Uso
-- **Scheda Screener**: scegli universo, premi **Analizza** → classifica dei
-  rimbalzi da ipervenduto.
+- **Scheda Screener**: scegli universo e filtri, premi **Analizza** →
+  classifica dei rimbalzi da ipervenduto che superano anche i filtri
+  fondamentali. Tocca **apri** nella colonna 📈 per il grafico del titolo.
 - **Scheda Backtest**: scegli anni e numero titoli, premi **Esegui** →
   grafico strategia vs S&P 500.
+
+### Filtri fondamentali (scheda Screener)
+Oltre al segnale tecnico puoi pretendere qualità dell'azienda:
+capitalizzazione minima (default 10 mld), PEG massimo (1), P/E massimo (35),
+ROE minimo (10%). I dati arrivano da Yahoo e vengono scaricati **solo per i
+candidati tecnici**, quindi restano veloci. Se un dato manca, di default il
+titolo viene escluso (puoi cambiarlo con la spunta "Escludi titoli con dati
+mancanti"). Nota: alcuni titoli hanno PEG/ROE non riportati da Yahoo — è
+normale che qualcuno venga scartato per dato mancante.
+
+### Aggiornare l'app dopo questa modifica
+Hai già l'app online: per applicare questa nuova versione ti basta
+**ricaricare `streamlit_app.py`** nel repo GitHub (Add file → Upload files →
+sovrascrivi → Commit). Streamlit ripubblica da solo in ~1 minuto.
+`requirements.txt` resta invariato.
 
 ## Aggiornare l'app in futuro
 Ti basta ricaricare `streamlit_app.py` nel repo GitHub (Add file → Upload,

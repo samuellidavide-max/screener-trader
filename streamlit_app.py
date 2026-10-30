@@ -139,6 +139,39 @@ def scarica(tickers, period=None, start=None):
 
 
 # ======================================================================
+#  DATI FONDAMENTALI (nome, capitalizzazione, PEG, P/E, ROE)
+#  Scaricati SOLO per i candidati tecnici (veloce), uno per uno con cache.
+# ======================================================================
+@st.cache_data(show_spinner=False, ttl=21600)
+def get_fondamentali(ticker):
+    try:
+        info = yf.Ticker(ticker).info
+    except Exception:
+        return {}
+
+    def g(*keys):
+        for k in keys:
+            v = info.get(k)
+            if v is not None:
+                return v
+        return None
+
+    return {
+        "Azienda": g("shortName", "longName") or ticker,
+        "MktCap": g("marketCap"),                     # in valuta (USD/EUR)
+        "PEG": g("trailingPegRatio", "pegRatio"),
+        "PE": g("trailingPE"),
+        "ROE": g("returnOnEquity"),                   # frazione: 0.15 = 15%
+    }
+
+
+def link_grafico(ticker, provider="Yahoo Finance"):
+    if provider == "TradingView":
+        return f"https://www.tradingview.com/chart/?symbol={ticker}"
+    return f"https://finance.yahoo.com/quote/{ticker}"
+
+
+# ======================================================================
 #  UI
 # ======================================================================
 st.set_page_config(page_title="WVF + Williams A/D", page_icon="📈", layout="centered")
@@ -158,7 +191,18 @@ with tab_scr:
         tickers_s = get_sp500() if universo == "S&P 500" else FTSE_MIB
 
     soglia = st.slider("Punteggio minimo", 0, 100, 0, 5)
-    solo_promossi = st.checkbox("Mostra solo i candidati validi (2 porte superate)", True)
+    chart_src = st.selectbox("Il click sul ticker apre il grafico su",
+                             ["Yahoo Finance", "TradingView"])
+
+    with st.expander("🔎 Filtri fondamentali", expanded=True):
+        usa_fond = st.checkbox("Applica filtri fondamentali", True)
+        f1, f2 = st.columns(2)
+        min_mktcap = f1.number_input("Capitalizzazione minima (miliardi)", 0.0, 5000.0, 10.0, 1.0)
+        max_peg = f2.number_input("PEG massimo", 0.0, 20.0, 1.0, 0.1)
+        f3, f4 = st.columns(2)
+        max_pe = f3.number_input("P/E massimo", 0.0, 500.0, 35.0, 1.0)
+        min_roe = f4.number_input("ROE minimo (%)", -100.0, 200.0, 10.0, 1.0)
+        escludi_mancanti = st.checkbox("Escludi titoli con dati fondamentali mancanti", True)
 
     if st.button("🚀 Analizza", type="primary", use_container_width=True):
         with st.spinner(f"Scarico e analizzo {len(tickers_s)} titoli…"):
@@ -169,28 +213,86 @@ with tab_scr:
                 d["Ticker"] = tk; d["Punteggio"] = sc
                 d["_pass"] = sc > 0
                 rows.append(d)
+
         if not rows:
             st.warning("Nessun dato scaricato. Riprova tra poco.")
         else:
             full = pd.DataFrame(rows)
             promossi = int(full["_pass"].sum())
-            out = full[full["_pass"]] if solo_promossi else full
-            out = out[out["Punteggio"] >= soglia].sort_values("Punteggio", ascending=False)
-            cols = ["Ticker", "Punteggio", "WVF_picco", "WVF_ora", "Zona_alta",
-                    "Rientro", "Regime", "WAD_accel", "WAD_cross"]
-            out = out[[c for c in cols if c in out.columns]].reset_index(drop=True)
+            # i candidati tecnici su cui ha senso guardare i fondamentali
+            cand = full[(full["_pass"]) & (full["Punteggio"] >= soglia)].copy()
+            cand = cand.sort_values("Punteggio", ascending=False).reset_index(drop=True)
 
+            # --- fondamentali solo per i candidati (veloce) ---
+            if len(cand):
+                prog = st.progress(0.0, text="Scarico i dati fondamentali dei candidati…")
+                fond = []
+                for i, tk in enumerate(cand["Ticker"], 1):
+                    fond.append(get_fondamentali(tk))
+                    prog.progress(i / len(cand))
+                prog.empty()
+                fdf = pd.DataFrame(fond)
+                for c in ["Azienda", "MktCap", "PEG", "PE", "ROE"]:
+                    cand[c] = fdf[c].values if c in fdf else None
+
+            # --- applica i filtri fondamentali ---
+            scartati_fond = 0
+            if usa_fond and len(cand):
+                def passa(r):
+                    checks = [
+                        (r["MktCap"], lambda v: v >= min_mktcap * 1e9),
+                        (r["PEG"],    lambda v: v < max_peg),
+                        (r["PE"],     lambda v: v < max_pe),
+                        (r["ROE"],    lambda v: v * 100 > min_roe),
+                    ]
+                    for val, cond in checks:
+                        if val is None or (isinstance(val, float) and pd.isna(val)):
+                            if escludi_mancanti:
+                                return False
+                            continue
+                        if not cond(val):
+                            return False
+                    return True
+                mask = cand.apply(passa, axis=1)
+                scartati_fond = int((~mask).sum())
+                cand = cand[mask].reset_index(drop=True)
+
+            # --- metriche di testa ---
             c1, c2, c3 = st.columns(3)
-            c1.metric("Candidati", promossi)
-            c2.metric("Forti ≥70", int((out["Punteggio"] >= 70).sum()) if len(out) else 0)
-            c3.metric("Top", f"{out['Punteggio'].max():.0f}" if len(out) else "—")
+            c1.metric("Passano tutto", len(cand))
+            c2.metric("Candidati tecnici", promossi)
+            c3.metric("Scartati dai fond.", scartati_fond if usa_fond else "—")
 
-            st.dataframe(
-                out.style.background_gradient(subset=["Punteggio"], cmap="RdYlGn", vmin=0, vmax=100),
-                use_container_width=True, hide_index=True
-            )
-            st.download_button("⬇️ CSV", out.to_csv(index=False).encode(),
-                               "screener.csv", "text/csv", use_container_width=True)
+            if not len(cand):
+                st.info("Nessun titolo supera sia lo screen tecnico sia i filtri fondamentali. "
+                        "Prova ad allentare i filtri o abbassa il punteggio minimo.")
+            else:
+                # colonne leggibili
+                view = pd.DataFrame()
+                view["Grafico"] = [link_grafico(t, chart_src) for t in cand["Ticker"]]
+                view["Ticker"] = cand["Ticker"]
+                view["Azienda"] = cand.get("Azienda", "")
+                view["Punteggio"] = cand["Punteggio"]
+                view["MktCap (mld)"] = (cand["MktCap"] / 1e9).round(1) if "MktCap" in cand else None
+                view["PEG"] = cand["PEG"].round(2) if "PEG" in cand else None
+                view["P/E"] = cand["PE"].round(1) if "PE" in cand else None
+                view["ROE %"] = (cand["ROE"] * 100).round(1) if "ROE" in cand else None
+                view["Regime"] = cand["Regime"]
+                view["WVF_picco"] = cand["WVF_picco"]
+                view["WAD_cross"] = cand["WAD_cross"]
+
+                st.dataframe(
+                    view,
+                    use_container_width=True, hide_index=True,
+                    column_config={
+                        "Grafico": st.column_config.LinkColumn(
+                            "📈", display_text="apri", width="small"),
+                        "Punteggio": st.column_config.NumberColumn(format="%.1f"),
+                    },
+                )
+                st.caption("Tocca **apri** nella colonna 📈 per vedere il grafico del titolo.")
+                st.download_button("⬇️ CSV", view.to_csv(index=False).encode(),
+                                   "screener.csv", "text/csv", use_container_width=True)
 
 
 # ----------------------------- BACKTEST -----------------------------
