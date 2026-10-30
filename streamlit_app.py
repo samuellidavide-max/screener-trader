@@ -295,18 +295,21 @@ with tab_scr:
                         "Prova ad allentare i filtri o abbassa il punteggio minimo.")
             else:
                 # colonne leggibili
+                def num(col):   # converte in numerico; i mancanti -> NaN (cella vuota)
+                    return pd.to_numeric(cand[col], errors="coerce") if col in cand else np.nan
+
                 view = pd.DataFrame()
                 view["Grafico"] = [link_grafico(t, chart_src) for t in cand["Ticker"]]
-                view["Ticker"] = cand["Ticker"]
-                view["Azienda"] = cand.get("Azienda", "")
-                view["Punteggio"] = cand["Punteggio"]
-                view["MktCap (mld)"] = (cand["MktCap"] / 1e9).round(1) if "MktCap" in cand else None
-                view["PEG"] = cand["PEG"].round(2) if "PEG" in cand else None
-                view["P/E"] = cand["PE"].round(1) if "PE" in cand else None
-                view["ROE %"] = (cand["ROE"] * 100).round(1) if "ROE" in cand else None
-                view["Regime"] = cand["Regime"]
-                view["WVF_picco"] = cand["WVF_picco"]
-                view["WAD_cross"] = cand["WAD_cross"]
+                view["Ticker"] = cand["Ticker"].values
+                view["Azienda"] = cand["Azienda"].values if "Azienda" in cand else ""
+                view["Punteggio"] = cand["Punteggio"].values
+                view["MktCap (mld)"] = (num("MktCap") / 1e9).round(1).values
+                view["PEG"] = num("PEG").round(2).values
+                view["P/E"] = num("PE").round(1).values
+                view["ROE %"] = (num("ROE") * 100).round(1).values
+                view["Regime"] = cand["Regime"].values
+                view["WVF_picco"] = cand["WVF_picco"].values
+                view["WAD_cross"] = cand["WAD_cross"].values
 
                 st.dataframe(
                     view,
