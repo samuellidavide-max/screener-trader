@@ -15,6 +15,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 import yfinance as yf
+import requests
 import warnings
 from datetime import datetime
 
@@ -181,6 +182,42 @@ def get_fondamentali(ticker):
     }
 
 
+@st.cache_data(show_spinner=False, ttl=21600)
+def get_fondamentali_finnhub(ticker, key):
+    """Dati fondamentali da Finnhub (affidabile anche dal cloud).
+    Ritorna lo stesso dizionario di get_fondamentali()."""
+    base = "https://finnhub.io/api/v1"
+    out = {"Azienda": ticker, "MktCap": None, "PEG": None, "PE": None, "ROE": None}
+    try:
+        p = requests.get(f"{base}/stock/profile2",
+                         params={"symbol": ticker, "token": key}, timeout=12).json()
+        if isinstance(p, dict):
+            if p.get("name"):
+                out["Azienda"] = p["name"]
+            if p.get("marketCapitalization"):      # Finnhub: in MILIONI
+                out["MktCap"] = float(p["marketCapitalization"]) * 1e6
+    except Exception:
+        pass
+    try:
+        m = requests.get(f"{base}/stock/metric",
+                         params={"symbol": ticker, "metric": "all", "token": key},
+                         timeout=12).json().get("metric", {})
+        pe = m.get("peTTM") or m.get("peBasicExclExtraTTM") or m.get("peInclExtraTTM")
+        out["PE"] = pe
+        roe = m.get("roeTTM")                      # Finnhub: gia' in percentuale
+        if roe is not None:
+            out["ROE"] = roe / 100.0               # lo riporto a frazione (coerente col resto)
+        peg = m.get("pegTTM")
+        if peg is None:                            # PEG calcolato se assente
+            growth = m.get("epsGrowthTTMYoy")      # in percentuale
+            if pe is not None and growth is not None and growth > 0:
+                peg = round(pe / growth, 2)
+        out["PEG"] = peg
+    except Exception:
+        pass
+    return out
+
+
 def link_grafico(ticker, provider="Yahoo Finance"):
     if provider == "TradingView":
         return f"https://www.tradingview.com/chart/?symbol={ticker}"
@@ -210,8 +247,22 @@ with tab_scr:
     chart_src = st.selectbox("Il click sul ticker apre il grafico su",
                              ["Yahoo Finance", "TradingView"])
 
+    # chiave Finnhub: prima dai secrets, poi eventualmente da campo manuale
+    finnhub_key = ""
+    try:
+        finnhub_key = st.secrets.get("FINNHUB_KEY", "")
+    except Exception:
+        finnhub_key = ""
+
     with st.expander("🔎 Filtri fondamentali", expanded=True):
         usa_fond = st.checkbox("Applica filtri fondamentali", True)
+        if not finnhub_key:
+            finnhub_key = st.text_input(
+                "Chiave Finnhub (consigliato impostarla nei Secrets)",
+                type="password",
+                help="Senza chiave si prova con Yahoo, che però dal server cloud è bloccato.")
+        else:
+            st.caption("✅ Chiave Finnhub attiva (dati fondamentali affidabili).")
         f1, f2 = st.columns(2)
         min_mktcap = f1.number_input("Capitalizzazione minima (miliardi)", 0.0, 5000.0, 10.0, 1.0)
         max_peg = f2.number_input("PEG massimo", 0.0, 20.0, 1.0, 0.1)
@@ -241,10 +292,14 @@ with tab_scr:
 
             # --- fondamentali solo per i candidati (veloce) ---
             if len(cand):
-                prog = st.progress(0.0, text="Scarico i dati fondamentali dei candidati…")
+                fonte = "Finnhub" if finnhub_key else "Yahoo"
+                prog = st.progress(0.0, text=f"Scarico i dati fondamentali dei candidati (fonte: {fonte})…")
                 fond = []
                 for i, tk in enumerate(cand["Ticker"], 1):
-                    fond.append(get_fondamentali(tk))
+                    if finnhub_key:
+                        fond.append(get_fondamentali_finnhub(tk, finnhub_key))
+                    else:
+                        fond.append(get_fondamentali(tk))
                     prog.progress(i / len(cand))
                 prog.empty()
                 fdf = pd.DataFrame(fond)
